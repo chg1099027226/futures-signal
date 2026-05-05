@@ -1,5 +1,6 @@
 const http = require("http");
 const https = require("https");
+const url = require("url");
 
 const HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -733,10 +734,29 @@ function getMainContract(product) {
 
 async function fetchRealQuote(contractCode) {
   try {
-    const res  = await fetchWithTimeout(\`/api/quote?code=\${contractCode}\`, 5000);
-    const text = await res.text();
-    return parseSinaQuote(text, contractCode);
-  } catch (e) {
+    var res = await fetchWithTimeout('/api/quote?code=' + contractCode, 5000);
+    var d = await res.json();
+    if (!d || !d.price) return null;
+    var product = parseProduct(contractCode);
+    var cfg = SYMBOL_CONFIG[product];
+    if (!cfg) return null;
+    var dec = getDecimals(cfg.tick);
+    var change = d.price - (d.prevClose || d.price);
+    var changePct = d.prevClose ? (change / d.prevClose * 100) : 0;
+    return {
+      contractCode: contractCode, product: product,
+      name: cfg.name, exchange: cfg.exchange,
+      price: +d.price.toFixed(dec), change: +change.toFixed(dec),
+      changePct: +changePct.toFixed(2),
+      open: +(d.open || d.price).toFixed(dec),
+      high: +(d.high || d.price).toFixed(dec),
+      low: +(d.low || d.price).toFixed(dec),
+      prevClose: +(d.prevClose || d.price).toFixed(dec),
+      volume: d.volume || 0, openInterest: 0, turnover: 0,
+      timestamp: Date.now(), isReal: true
+    };
+  } catch (e) { return null; }
+} catch (e) {
     return null;
   }
 }
@@ -801,8 +821,19 @@ function parseSinaQuote(text, contractCode) {
 // 获取历史K线
 async function fetchRealKlines(contractCode, tf) {
   try {
-    const type = tf === 'D' ? '0' : String(tf);
-    const res  = await fetchWithTimeout(\`/api/kline?code=\${contractCode}&type=\${type}\`, 8000);
+    var type = tf === 'D' ? '0' : String(tf);
+    var res = await fetchWithTimeout('/api/kline?code=' + contractCode + '&type=' + type, 8000);
+    var arr = await res.json();
+    if (!arr || !arr.length) return null;
+    return arr.map(function(item) {
+      var ts = item.d.indexOf(' ') > -1
+        ? new Date(item.d.replace(' ', 'T') + '+08:00').getTime()
+        : new Date(item.d + 'T00:00:00+08:00').getTime();
+      return { timestamp: ts, open: parseFloat(item.o), high: parseFloat(item.h),
+               low: parseFloat(item.l), close: parseFloat(item.c), volume: parseInt(item.v) || 0 };
+    }).filter(function(k) { return k.close > 0; });
+  } catch (e) { return null; }
+}\`, 8000);
     const text = await res.text();
     return parseSinaKlines(text);
   } catch (e) {
@@ -841,10 +872,11 @@ function parseSinaKlines(text) {
 
 // 带超时的 fetch
 function fetchWithTimeout(url, ms) {
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
+  var ctrl = new AbortController();
+  var timer = setTimeout(function(){ ctrl.abort(); }, ms);
   return fetch(url, { signal: ctrl.signal, cache: 'no-cache' })
-    .finally(() => clearTimeout(timer));
+    .then(function(r){ clearTimeout(timer); return r; })
+    .catch(function(e){ clearTimeout(timer); throw e; });
 }
 
 // ===== 模拟数据（兜底）=====
@@ -1819,19 +1851,19 @@ function sleep(ms) {
 `;
 
 const server = http.createServer((req, res) => {
-  const u = require("url").parse(req.url, true);
+  const p = url.parse(req.url, true);
 
-  if (u.pathname === "/api/quote") {
-    const code = u.query.code;
+  if (p.pathname === "/api/quote") {
+    const code = p.query.code;
     if (!code) { res.writeHead(400); res.end("no code"); return; }
-    proxy("https://hq.sinajs.cn/list=nf_" + code, res);
+    fetchEmQuote(code, res);
     return;
   }
-  if (u.pathname === "/api/kline") {
-    const code = u.query.code;
-    const type = u.query.type || "15";
+  if (p.pathname === "/api/kline") {
+    const code = p.query.code;
+    const type = p.query.type || "15";
     if (!code) { res.writeHead(400); res.end("no code"); return; }
-    proxy("https://stock2.finance.sina.com.cn/futures/api/jsonp.php/cb=/InnerFuturesNewService.getFewMinLine?symbol=" + code + "&type=" + type, res);
+    fetchEmKline(code, type, res);
     return;
   }
 
@@ -1839,15 +1871,86 @@ const server = http.createServer((req, res) => {
   res.end(HTML);
 });
 
-function proxy(targetUrl, res) {
-  https.get(targetUrl, {headers: {"Referer": "https://finance.sina.com.cn", "User-Agent": "Mozilla/5.0"}}, function(r) {
-    var d = [];
-    r.on("data", function(c){ d.push(c); });
-    r.on("end", function(){
-      res.writeHead(200, {"Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*"});
-      res.end(Buffer.concat(d).toString());
-    });
-  }).on("error", function(){ res.writeHead(500); res.end("err"); });
+// 东方财富行情（遍历分页找合约）
+function fetchEmQuote(code, res) {
+  // 确定市场代码: SHFE=113, DCE=114, CZCE=115
+  const emCode = code.toLowerCase();
+  const allUrl = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1000&po=1&np=1&fltt=2&invt=2&fs=m:113,m:114,m:115&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18";
+  
+  httpsGet(allUrl, function(err, body) {
+    if (err) { res.writeHead(500); res.end("err"); return; }
+    try {
+      const d = JSON.parse(body);
+      const items = (d.data && d.data.diff) || [];
+      // 东方财富代码：SHFE/DCE用小写如rb2610，CZCE用大写如FG609(3位年月)
+      let found = null;
+      for (const item of items) {
+        const ic = item.f12 || "";
+        if (ic === emCode || ic === code || ic.toLowerCase() === emCode) {
+          found = item; break;
+        }
+      }
+      if (!found) {
+        // CZCE格式：MA2509 -> MA509
+        const czceCode = code.replace(/(\D+)2(\d{3})/, "$1$2");
+        for (const item of items) {
+          if (item.f12 === czceCode) { found = item; break; }
+        }
+      }
+      if (!found) { res.writeHead(404); res.end("not found"); return; }
+      
+      // 返回格式化的JSON
+      const result = JSON.stringify({
+        price: found.f2, open: found.f17, high: found.f15, low: found.f16,
+        prevClose: found.f18, changePct: found.f3, volume: found.f5, name: found.f14
+      });
+      res.writeHead(200, {"Content-Type":"application/json","Access-Control-Allow-Origin":"*"});
+      res.end(result);
+    } catch(e) { res.writeHead(500); res.end("parse err"); }
+  });
 }
 
-server.listen(process.env.PORT || 3000, function(){ console.log("Server running"); });
+// 东方财富K线
+function fetchEmKline(code, type, res) {
+  // secid: 113.rb2610 / 114.i2609 / 115.FG609
+  const emCode = code.toLowerCase();
+  const czceCode = code.replace(/(\D+)2(\d{3})/, "$1$2");
+  
+  // 判断交易所
+  let mkt = "113";
+  const product = code.replace(/\d+$/, "").toUpperCase();
+  const dceList = ["I","J","JM","PP","L","V","EB","EG"];
+  const czceList = ["SF","SM","FG","MA","TA","SA","UR"];
+  if (dceList.includes(product)) mkt = "114";
+  else if (czceList.includes(product)) mkt = "115";
+  
+  const secCode = mkt === "115" ? czceCode : emCode;
+  const klt = type === "0" ? "101" : type; // 0=日线=101
+  
+  const kUrl = "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + mkt + "." + secCode + "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56&klt=" + klt + "&fqt=0&beg=0&end=20500101&lmt=300&ut=fa5fd1943c7b386f172d6893dbfba10b";
+  
+  httpsGet(kUrl, function(err, body) {
+    if (err) { res.writeHead(500); res.end("err"); return; }
+    try {
+      const d = JSON.parse(body);
+      const klines = (d.data && d.data.klines) || [];
+      // 转换格式: "2026-04-30 15:00,3212,3214,3215,3208,62057" -> {d,o,c,h,l,v}
+      const result = klines.map(function(line) {
+        const p = line.split(",");
+        return {d:p[0], o:p[1], c:p[2], h:p[3], l:p[4], v:p[5]};
+      });
+      res.writeHead(200, {"Content-Type":"application/json","Access-Control-Allow-Origin":"*"});
+      res.end(JSON.stringify(result));
+    } catch(e) { res.writeHead(500); res.end("kline parse err"); }
+  });
+}
+
+function httpsGet(targetUrl, cb) {
+  https.get(targetUrl, {headers:{"User-Agent":"Mozilla/5.0"}}, function(r) {
+    var d = [];
+    r.on("data", function(c){ d.push(c); });
+    r.on("end", function(){ cb(null, Buffer.concat(d).toString()); });
+  }).on("error", function(e){ cb(e); });
+}
+
+server.listen(process.env.PORT || 3000, function(){ console.log("Server running on port " + (process.env.PORT || 3000)); });
