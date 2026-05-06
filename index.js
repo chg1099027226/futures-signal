@@ -780,10 +780,12 @@ function parseSinaQuote(text, contractCode) {
     const open      = parseFloat(p[2])  || 0;
     const high      = parseFloat(p[3])  || 0;
     const low       = parseFloat(p[4])  || 0;
-    const price     = parseFloat(p[5])  || 0;
+    var   price     = parseFloat(p[5])  || 0;
     const oi        = parseInt(p[14])   || 0;
     const prevClose = parseFloat(p[27]) || 0;
 
+    // 非交易时间price=0，用买一价或昨结算代替
+    if (price <= 0) price = parseFloat(p[6]) || parseFloat(p[8]) || prevClose;
     if (price <= 0) return null;
 
     // 成交量：用持仓量旁边的字段或买卖量之和估算
