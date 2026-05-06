@@ -443,7 +443,8 @@ body {
   <header class="topbar">
     <span class="logo">📊 期货信号分析</span>
     <span class="data-src" id="dataSrc">数据来源：新浪财经（实时）</span>
-    <span class="last-update" id="lastUpdate"></span>\n    <button onclick="if(activeContract){runAnalysis(activeContract);}" style="background:#58a6ff;color:#fff;border:none;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px;">🔄 刷新数据</button>
+    <span class="last-update" id="lastUpdate"></span>
+    <button onclick="if(activeContract){runAnalysis(activeContract);}" style="background:#58a6ff;color:#fff;border:none;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px;">🔄 刷新</button>
   </header>
 
   <!-- ── 第一步：品种按钮 ── -->
@@ -667,291 +668,32 @@ body {
 </div><!-- /app -->
 
 <script>
-/**
- * data.js  —  品种配置 + 合约月份 + 真实行情
- *
- * 数据源：东方财富（EM）公开接口，原生支持 CORS，无需代理
- *
- * 接口说明：
- *   行情：https://push2.eastmoney.com/api/qt/stock/get
- *   K线：https://push2his.eastmoney.com/api/qt/stock/kline/get
- *
- * 期货代码规则（东方财富）：
- *   SHFE → 113.RB2510   DCE → 114.I2509   CZCE → 115.MA509
- *   注意：CZCE 合约代码只有一位年份，如 MA509 = MA2509
- */
 
-// ===== 品种配置 =====
 const SYMBOL_CONFIG = {
-  // 黑色金属
-  RB:  { name: '螺纹钢',   base: 3500,  tick: 1,   mult: 10,  exchange: 'SHFE', mkt: 113, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,10] },
-  HC:  { name: '热轧卷板', base: 3600,  tick: 1,   mult: 10,  exchange: 'SHFE', mkt: 113, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,10] },
-  I:   { name: '铁矿石',   base: 820,   tick: 0.5, mult: 100, exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  J:   { name: '焦炭',     base: 1850,  tick: 0.5, mult: 100, exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  JM:  { name: '焦煤',     base: 1400,  tick: 0.5, mult: 60,  exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  SF:  { name: '硅铁',     base: 6800,  tick: 2,   mult: 5,   exchange: 'CZCE', mkt: 115, activeMonths: [1,3,5,7,9,11],               mainMonths: [1,5,9]  },
-  SM:  { name: '硅锰',     base: 6200,  tick: 2,   mult: 5,   exchange: 'CZCE', mkt: 115, activeMonths: [1,3,5,7,9,11],               mainMonths: [1,5,9]  },
-  // 建材
-  FG:  { name: '玻璃',     base: 1400,  tick: 1,   mult: 20,  exchange: 'CZCE', mkt: 115, activeMonths: [1,3,5,7,9,11],               mainMonths: [1,5,9]  },
-  // 化工
-  MA:  { name: '甲醇',     base: 2450,  tick: 1,   mult: 10,  exchange: 'CZCE', mkt: 115, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  TA:  { name: 'PTA',      base: 5800,  tick: 2,   mult: 5,   exchange: 'CZCE', mkt: 115, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  PP:  { name: '聚丙烯',   base: 7800,  tick: 1,   mult: 5,   exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  L:   { name: '聚乙烯',   base: 8200,  tick: 1,   mult: 5,   exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  V:   { name: 'PVC',      base: 6200,  tick: 5,   mult: 5,   exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  EB:  { name: '苯乙烯',   base: 8200,  tick: 1,   mult: 5,   exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  EG:  { name: '乙二醇',   base: 4500,  tick: 1,   mult: 10,  exchange: 'DCE',  mkt: 114, activeMonths: [1,2,3,4,5,6,7,8,9,10,11,12], mainMonths: [1,5,9]  },
-  SA:  { name: '纯碱',     base: 1800,  tick: 1,   mult: 20,  exchange: 'CZCE', mkt: 115, activeMonths: [1,3,5,7,9,11],               mainMonths: [1,5,9]  },
-  UR:  { name: '尿素',     base: 1900,  tick: 1,   mult: 20,  exchange: 'CZCE', mkt: 115, activeMonths: [1,3,5,7,9,11],               mainMonths: [1,5,9]  },
+  RB: {name:'螺纹钢',tick:1,exchange:'SHFE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,10]},
+  HC: {name:'热轧卷板',tick:1,exchange:'SHFE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,10]},
+  I:  {name:'铁矿石',tick:0.5,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  J:  {name:'焦炭',tick:0.5,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  JM: {name:'焦煤',tick:0.5,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  SF: {name:'硅铁',tick:2,exchange:'CZCE',activeMonths:[1,3,5,7,9,11],mainMonths:[1,5,9]},
+  SM: {name:'硅锰',tick:2,exchange:'CZCE',activeMonths:[1,3,5,7,9,11],mainMonths:[1,5,9]},
+  FG: {name:'玻璃',tick:1,exchange:'CZCE',activeMonths:[1,3,5,7,9,11],mainMonths:[1,5,9]},
+  MA: {name:'甲醇',tick:1,exchange:'CZCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  TA: {name:'PTA',tick:2,exchange:'CZCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  PP: {name:'聚丙烯',tick:1,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  L:  {name:'聚乙烯',tick:1,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  V:  {name:'PVC',tick:5,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  EB: {name:'苯乙烯',tick:1,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  EG: {name:'乙二醇',tick:1,exchange:'DCE',activeMonths:[1,2,3,4,5,6,7,8,9,10,11,12],mainMonths:[1,5,9]},
+  SA: {name:'纯碱',tick:1,exchange:'CZCE',activeMonths:[1,3,5,7,9,11],mainMonths:[1,5,9]},
+  UR: {name:'尿素',tick:1,exchange:'CZCE',activeMonths:[1,3,5,7,9,11],mainMonths:[1,5,9]},
 };
-
-// ===== 合约月份生成 =====
-function generateContracts(product) {
-  const cfg = SYMBOL_CONFIG[product];
-  if (!cfg) return [];
-  const now = new Date();
-  const curYear = now.getFullYear(), curMonth = now.getMonth() + 1;
-  const contracts = [];
-  for (let y = curYear; y <= curYear + 1; y++) {
-    for (const m of cfg.activeMonths) {
-      if (y === curYear && m < curMonth) continue;
-      if ((y - curYear) * 12 + (m - curMonth) > 12) continue;
-      const yy = String(y).slice(2);
-      const mm = String(m).padStart(2, '0');
-      contracts.push({ code: \`\${product}\${yy}\${mm}\`, year: y, month: m, isMain: cfg.mainMonths.includes(m) });
-    }
-  }
-  return contracts;
-}
-
-function getMainContract(product) {
-  const list = generateContracts(product);
-  return list.find(c => c.isMain) || list[0] || null;
-}
-
-// ===== 真实行情获取（通过本地代理 server.js）=====
-// 本地代理运行在同源，无 CORS 问题，直接 fetch 即可
-
-async function fetchRealQuote(contractCode) {
-  try {
-    var res = await fetchWithTimeout('/api/quote?code=' + contractCode, 5000);
-    var d = await res.json();
-    if (!d || !d.price) return null;
-    var product = parseProduct(contractCode);
-    var cfg = SYMBOL_CONFIG[product];
-    if (!cfg) return null;
-    var dec = getDecimals(cfg.tick);
-    var change = d.price - (d.prevClose || d.price);
-    var changePct = d.prevClose ? (change / d.prevClose * 100) : 0;
-    return {
-      contractCode: contractCode, product: product,
-      name: cfg.name, exchange: cfg.exchange,
-      price: +d.price.toFixed(dec), change: +change.toFixed(dec),
-      changePct: +changePct.toFixed(2),
-      open: +(d.open || d.price).toFixed(dec),
-      high: +(d.high || d.price).toFixed(dec),
-      low: +(d.low || d.price).toFixed(dec),
-      prevClose: +(d.prevClose || d.price).toFixed(dec),
-      volume: d.volume || 0, openInterest: 0, turnover: 0,
-      timestamp: Date.now()
-    };
-  } catch (e) { return null; }
-} catch (e) {
-    return null;
-  }
-}
-
-// 解析新浪期货行情（2026年实测字段顺序）
-// [0]名称 [1]? [2]今开 [3]最高 [4]最低 [5]最新价
-// [6]买一价 [7]卖一价 [8-10]... [11]买量 [12]卖量
-// [13]成交额 [14]持仓量 [15-16]... [17]日期 [18]是否交易
-// [27]昨结算价
-function parseSinaQuote(text, contractCode) {
-  try {
-    const m = text.match(/"([^"]+)"/);
-    if (!m || !m[1] || m[1].length < 5) return null;
-    const p = m[1].split(',');
-    if (p.length < 28) return null;
-
-    const product = parseProduct(contractCode);
-    const cfg     = SYMBOL_CONFIG[product];
-    if (!cfg) return null;
-
-    const open      = parseFloat(p[2])  || 0;
-    const high      = parseFloat(p[3])  || 0;
-    const low       = parseFloat(p[4])  || 0;
-    var   price     = parseFloat(p[5])  || 0;
-    const oi        = parseInt(p[14])   || 0;
-    const prevClose = parseFloat(p[27]) || 0;
-
-    // 非交易时间price=0，用买一价或昨结算代替
-    if (price <= 0) price = parseFloat(p[6]) || parseFloat(p[8]) || prevClose;
-    if (price <= 0) return null;
-
-    // 成交量：用持仓量旁边的字段或买卖量之和估算
-    const vol1 = parseInt(p[11]) || 0;
-    const vol2 = parseInt(p[12]) || 0;
-    const volume = vol1 + vol2;
-
-    const dec       = getDecimals(cfg.tick);
-    const change    = prevClose > 0 ? price - prevClose : 0;
-    const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
-
-    return {
-      contractCode, product,
-      name: cfg.name, exchange: cfg.exchange,
-      price:       +price.toFixed(dec),
-      change:      +change.toFixed(dec),
-      changePct:   +changePct.toFixed(2),
-      open:        +open.toFixed(dec),
-      high:        +high.toFixed(dec),
-      low:         +low.toFixed(dec),
-      prevClose:   +prevClose.toFixed(dec),
-      volume,
-      openInterest: oi,
-      turnover:    +(parseFloat(p[13]) / 10000 || 0).toFixed(2),
-      limitUp:     +(prevClose * 1.07).toFixed(dec),
-      limitDown:   +(prevClose * 0.93).toFixed(dec),
-      timestamp:   Date.now(),
-    };
-  } catch (e) {
-    return null;
-  }
-}
-
-// 获取历史K线
-async function fetchRealKlines(contractCode, tf) {
-  try {
-    var type = tf === 'D' ? '0' : String(tf);
-    var res = await fetchWithTimeout('/api/kline?code=' + contractCode + '&type=' + type, 8000);
-    var arr = await res.json();
-    if (!arr || !arr.length) return null;
-    return arr.map(function(item) {
-      var ts = item.d.indexOf(' ') > -1
-        ? new Date(item.d.replace(' ', 'T') + '+08:00').getTime()
-        : new Date(item.d + 'T00:00:00+08:00').getTime();
-      return { timestamp: ts, open: parseFloat(item.o), high: parseFloat(item.h),
-               low: parseFloat(item.l), close: parseFloat(item.c), volume: parseInt(item.v) || 0 };
-    }).filter(function(k) { return k.close > 0; });
-  } catch (e) { return null; }
-}\`, 8000);
-    const text = await res.text();
-    return parseSinaKlines(text);
-  } catch (e) {
-    return null;
-  }
-}
-
-// 解析新浪K线（对象数组格式 {d, o, h, l, c, v, p}）
-function parseSinaKlines(text) {
-  try {
-    // 去掉 JSONP 包装 cb=(...)
-    const lparen = text.indexOf('(');
-    const rparen = text.lastIndexOf(')');
-    if (lparen === -1 || rparen === -1) return null;
-    const jsonStr = text.slice(lparen + 1, rparen);
-
-    const arr = JSON.parse(jsonStr);
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-
-    return arr.map(item => {
-      const d = item.d || '';
-      const o = parseFloat(item.o);
-      const h = parseFloat(item.h);
-      const l = parseFloat(item.l);
-      const c = parseFloat(item.c);
-      const v = parseInt(item.v) || 0;
-      const ts = d.includes(' ')
-        ? new Date(d.replace(' ', 'T') + '+08:00').getTime()
-        : new Date(d + 'T00:00:00+08:00').getTime();
-      return { timestamp: ts, open: o, high: h, low: l, close: c, volume: v };
-    }).filter(k => k.close > 0 && !isNaN(k.close));
-  } catch (e) {
-    return null;
-  }
-}
-
-// 带超时的 fetch
-function fetchWithTimeout(url, ms) {
-  var ctrl = new AbortController();
-  var timer = setTimeout(function(){ ctrl.abort(); }, ms);
-  return fetch(url, { signal: ctrl.signal, cache: 'no-cache' })
-    .then(function(r){ clearTimeout(timer); return r; })
-    .catch(function(e){ clearTimeout(timer); throw e; });
-}
-
-// ===== 模拟数据（兜底）=====
-const contractState = {};
-
-function getContractState(contractCode) {
-  if (!contractState[contractCode]) {
-    const product = parseProduct(contractCode);
-    const cfg     = SYMBOL_CONFIG[product];
-    if (!cfg) return null;
-    const { year, month } = parseContractDate(contractCode);
-    const now = new Date();
-    const monthsAhead = (year - now.getFullYear()) * 12 + (month - now.getMonth() - 1);
-    const basis     = 1 + monthsAhead * (Math.random() - 0.45) * 0.002;
-    const basePrice = cfg.base * basis * (1 + (Math.random() - 0.5) * 0.02);
-    contractState[contractCode] = {
-      price: basePrice, trend: (Math.random() - 0.48) * 0.002,
-      volatility: cfg.base * 0.003,
-      volumeBase: Math.floor(Math.random() * 50000 + 5000),
-      openInterestBase: Math.floor(Math.random() * 300000 + 10000),
-      prevClose: basePrice * (1 + (Math.random() - 0.5) * 0.015),
-      openPrice: null, highPrice: null, lowPrice: null,
-      klineHistory: { 5: [], 15: [], 60: [], D: [] },
-    };
-    const s = contractState[contractCode];
-    s.openPrice = s.price * (1 + (Math.random() - 0.5) * 0.005);
-    s.highPrice = s.price; s.lowPrice = s.price;
-    generateSimKlines(contractCode);
-  }
-  return contractState[contractCode];
-}
-
-function generateSimKlines(contractCode) {
-  const state = contractState[contractCode];
-  [5, 15, 60, 'D'].forEach(tf => {
-    const bars = tf === 'D' ? 120 : 200;
-    const tfMs = tf === 'D' ? 86400000 : tf * 60000;
-    let price  = state.prevClose * (1 + (Math.random() - 0.5) * 0.05);
-    const now  = Date.now();
-    const klines = [];
-    for (let i = bars; i >= 0; i--) {
-      const vol   = state.volatility * (0.5 + Math.random());
-      const open  = price;
-      const close = price + (Math.random() - 0.48) * vol * 2;
-      const high  = Math.max(open, close) + Math.random() * vol;
-      const low   = Math.min(open, close) - Math.random() * vol;
-      klines.push({ timestamp: now - i * tfMs, open, high, low, close, volume: Math.floor(state.volumeBase * (0.5 + Math.random() * 1.5)) });
-      price = close;
-    }
-    state.klineHistory[tf] = klines;
-  });
-}
-// ===== 统一对外接口 =====
-async function fetchQuote(contractCode) {
-  return await fetchRealQuote(contractCode);
-}
-
-async function fetchKlines(contractCode, tf) {
-  return await fetchRealKlines(contractCode, tf);
-}
-
-// ===== 工具函数 =====
-function parseProduct(contractCode) { return contractCode.replace(/\\d+$/, ''); }
-
-function parseContractDate(contractCode) {
-  const product = parseProduct(contractCode);
-  const dateStr = contractCode.slice(product.length);
-  return { year: 2000 + parseInt(dateStr.slice(0, 2)), month: parseInt(dateStr.slice(2)) };
-}
-
-function getDecimals(tick) {
-  const s = tick.toString(), d = s.indexOf('.');
-  return d === -1 ? 0 : s.length - d - 1;
-}
+function generateContracts(product){var cfg=SYMBOL_CONFIG[product];if(!cfg)return[];var now=new Date(),cy=now.getFullYear(),cm=now.getMonth()+1,r=[];for(var y=cy;y<=cy+1;y++)for(var i=0;i<cfg.activeMonths.length;i++){var m=cfg.activeMonths[i];if(y===cy&&m<cm)continue;if((y-cy)*12+(m-cm)>12)continue;r.push({code:product+String(y).slice(2)+String(m).padStart(2,'0'),year:y,month:m,isMain:cfg.mainMonths.indexOf(m)>=0});}return r;}
+function getMainContract(p){var l=generateContracts(p);for(var i=0;i<l.length;i++)if(l[i].isMain)return l[i];return l[0]||null;}
+function getDecimals(t){var s=t.toString(),d=s.indexOf('.');return d===-1?0:s.length-d-1;}
+function parseProduct(c){return c.replace(/[0-9]+$/,'');}
+async function fetchQuote(contractCode){try{var res=await fetch('/api/quote?code='+contractCode);var text=await res.text();var m=text.match(/"([^"]+)"/);if(!m||!m[1])return null;var p=m[1].split(',');if(p.length<28)return null;var product=parseProduct(contractCode);var cfg=SYMBOL_CONFIG[product];if(!cfg)return null;var price=parseFloat(p[5])||0;if(price<=0)price=parseFloat(p[6])||parseFloat(p[8])||parseFloat(p[27])||0;if(price<=0)return null;var prevClose=parseFloat(p[27])||price;var dec=getDecimals(cfg.tick);var change=price-prevClose;var changePct=prevClose>0?(change/prevClose*100):0;return{contractCode:contractCode,product:product,name:cfg.name,exchange:cfg.exchange,price:+price.toFixed(dec),change:+change.toFixed(dec),changePct:+changePct.toFixed(2),open:+(parseFloat(p[2])||price).toFixed(dec),high:+(parseFloat(p[3])||price).toFixed(dec),low:+(parseFloat(p[4])||price).toFixed(dec),prevClose:+prevClose.toFixed(dec),volume:parseInt(p[11])||0,openInterest:parseInt(p[14])||0,timestamp:Date.now()};}catch(e){return null;}}
+async function fetchKlines(contractCode,tf){try{var type=tf==='D'?'0':String(tf);var res=await fetch('/api/kline?code='+contractCode+'&type='+type);var text=await res.text();var lp=text.indexOf('(');var rp=text.lastIndexOf(')');if(lp===-1||rp===-1)return null;var arr=JSON.parse(text.slice(lp+1,rp));if(!arr||!arr.length)return null;return arr.map(function(item){var d=item.d||'';var ts=d.indexOf(' ')>-1?new Date(d.replace(' ','T')+'+08:00').getTime():new Date(d+'T00:00:00+08:00').getTime();return{timestamp:ts,open:parseFloat(item.o),high:parseFloat(item.h),low:parseFloat(item.l),close:parseFloat(item.c),volume:parseInt(item.v)||0};}).filter(function(k){return k.close>0;});}catch(e){return null;}}
 
 </script>
 <script>
@@ -1512,9 +1254,9 @@ async function runAnalysis(contractCode) {
     if (!quote) throw new Error('行情获取失败，请检查网络');
 
     document.getElementById('dataSrc').textContent =
-      '数据来源：新浪财经（实时）';
+      quote.isReal ? '数据来源：新浪财经（实时）' : '数据来源：模拟数据（接口不可用）';
     document.getElementById('dataSrc').style.color =
-      '#3fb950';
+      quote.isReal ? '#3fb950' : '#d29922';
 
     renderPriceBar(quote, cfg);
     document.getElementById('priceBar').style.display = 'flex';
@@ -1814,107 +1556,34 @@ function sleep(ms) {
 </html>
 `;
 
-const server = http.createServer((req, res) => {
-  const p = url.parse(req.url, true);
-
+const server = http.createServer(function(req, res) {
+  var p = url.parse(req.url, true);
   if (p.pathname === "/api/quote") {
-    const code = p.query.code;
+    var code = p.query.code;
     if (!code) { res.writeHead(400); res.end("no code"); return; }
-    fetchEmQuote(code, res);
+    proxy("https://hq.sinajs.cn/list=nf_" + code, res);
     return;
   }
   if (p.pathname === "/api/kline") {
-    const code = p.query.code;
-    const type = p.query.type || "15";
+    var code = p.query.code;
+    var type = p.query.type || "15";
     if (!code) { res.writeHead(400); res.end("no code"); return; }
-    fetchEmKline(code, type, res);
+    proxy("https://stock2.finance.sina.com.cn/futures/api/jsonp.php/cb=/InnerFuturesNewService.getFewMinLine?symbol=" + code + "&type=" + type, res);
     return;
   }
-
   res.writeHead(200, {"Content-Type": "text/html; charset=utf-8"});
   res.end(HTML);
 });
 
-// 东方财富行情（遍历分页找合约）
-function fetchEmQuote(code, res) {
-  // 确定市场代码: SHFE=113, DCE=114, CZCE=115
-  const emCode = code.toLowerCase();
-  const allUrl = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1000&po=1&np=1&fltt=2&invt=2&fs=m:113,m:114,m:115&fields=f12,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18";
-  
-  httpsGet(allUrl, function(err, body) {
-    if (err) { res.writeHead(500); res.end("err"); return; }
-    try {
-      const d = JSON.parse(body);
-      const items = (d.data && d.data.diff) || [];
-      // 东方财富代码：SHFE/DCE用小写如rb2610，CZCE用大写如FG609(3位年月)
-      let found = null;
-      for (const item of items) {
-        const ic = item.f12 || "";
-        if (ic === emCode || ic === code || ic.toLowerCase() === emCode) {
-          found = item; break;
-        }
-      }
-      if (!found) {
-        // CZCE格式：MA2509 -> MA509
-        const czceCode = code.replace(/(\D+)2(\d{3})/, "$1$2");
-        for (const item of items) {
-          if (item.f12 === czceCode) { found = item; break; }
-        }
-      }
-      if (!found) { res.writeHead(404); res.end("not found"); return; }
-      
-      // 返回格式化的JSON
-      const result = JSON.stringify({
-        price: found.f2, open: found.f17, high: found.f15, low: found.f16,
-        prevClose: found.f18, changePct: found.f3, volume: found.f5, name: found.f14
-      });
-      res.writeHead(200, {"Content-Type":"application/json","Access-Control-Allow-Origin":"*"});
-      res.end(result);
-    } catch(e) { res.writeHead(500); res.end("parse err"); }
-  });
-}
-
-// 东方财富K线
-function fetchEmKline(code, type, res) {
-  // secid: 113.rb2610 / 114.i2609 / 115.FG609
-  const emCode = code.toLowerCase();
-  const czceCode = code.replace(/(\D+)2(\d{3})/, "$1$2");
-  
-  // 判断交易所
-  let mkt = "113";
-  const product = code.replace(/\d+$/, "").toUpperCase();
-  const dceList = ["I","J","JM","PP","L","V","EB","EG"];
-  const czceList = ["SF","SM","FG","MA","TA","SA","UR"];
-  if (dceList.includes(product)) mkt = "114";
-  else if (czceList.includes(product)) mkt = "115";
-  
-  const secCode = mkt === "115" ? czceCode : emCode;
-  const klt = type === "0" ? "101" : type; // 0=日线=101
-  
-  const kUrl = "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + mkt + "." + secCode + "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56&klt=" + klt + "&fqt=0&beg=0&end=20500101&lmt=300&ut=fa5fd1943c7b386f172d6893dbfba10b";
-  
-  httpsGet(kUrl, function(err, body) {
-    if (err) { res.writeHead(500); res.end("err"); return; }
-    try {
-      const d = JSON.parse(body);
-      const klines = (d.data && d.data.klines) || [];
-      // 转换格式: "2026-04-30 15:00,3212,3214,3215,3208,62057" -> {d,o,c,h,l,v}
-      const result = klines.map(function(line) {
-        const p = line.split(",");
-        return {d:p[0], o:p[1], c:p[2], h:p[3], l:p[4], v:p[5]};
-      });
-      res.writeHead(200, {"Content-Type":"application/json","Access-Control-Allow-Origin":"*"});
-      res.end(JSON.stringify(result));
-    } catch(e) { res.writeHead(500); res.end("kline parse err"); }
-  });
-}
-
-function httpsGet(targetUrl, cb) {
-  https.get(targetUrl, {headers:{"User-Agent":"Mozilla/5.0"}}, function(r) {
+function proxy(u, res) {
+  https.get(u, {headers:{"Referer":"https://finance.sina.com.cn","User-Agent":"Mozilla/5.0"}}, function(r) {
     var d = [];
     r.on("data", function(c){ d.push(c); });
-    r.on("end", function(){ cb(null, Buffer.concat(d).toString()); });
-  }).on("error", function(e){ cb(e); });
+    r.on("end", function(){
+      res.writeHead(200, {"Content-Type":"text/plain; charset=utf-8","Access-Control-Allow-Origin":"*"});
+      res.end(Buffer.concat(d).toString());
+    });
+  }).on("error", function(){ res.writeHead(500); res.end("err"); });
 }
 
-server.listen(process.env.PORT || 3000, function(){ console.log("Server running on port " + (process.env.PORT || 3000)); });
+server.listen(process.env.PORT || 3000, function(){ console.log("Server running"); });
