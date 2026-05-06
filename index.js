@@ -443,7 +443,7 @@ body {
   <header class="topbar">
     <span class="logo">📊 期货信号分析</span>
     <span class="data-src" id="dataSrc">数据来源：新浪财经（实时）</span>
-    <span class="last-update" id="lastUpdate"></span>
+    <span class="last-update" id="lastUpdate"></span>\n    <button onclick="if(activeContract){runAnalysis(activeContract);}" style="background:#58a6ff;color:#fff;border:none;border-radius:6px;padding:5px 14px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px;">🔄 刷新数据</button>
   </header>
 
   <!-- ── 第一步：品种按钮 ── -->
@@ -753,7 +753,7 @@ async function fetchRealQuote(contractCode) {
       low: +(d.low || d.price).toFixed(dec),
       prevClose: +(d.prevClose || d.price).toFixed(dec),
       volume: d.volume || 0, openInterest: 0, turnover: 0,
-      timestamp: Date.now(), isReal: true
+      timestamp: Date.now()
     };
   } catch (e) { return null; }
 } catch (e) {
@@ -813,7 +813,6 @@ function parseSinaQuote(text, contractCode) {
       limitUp:     +(prevClose * 1.07).toFixed(dec),
       limitDown:   +(prevClose * 0.93).toFixed(dec),
       timestamp:   Date.now(),
-      isReal:      true,
     };
   } catch (e) {
     return null;
@@ -931,50 +930,13 @@ function generateSimKlines(contractCode) {
     state.klineHistory[tf] = klines;
   });
 }
-
-function getSimQuote(contractCode) {
-  const state = getContractState(contractCode);
-  if (!state) return null;
-  const product = parseProduct(contractCode);
-  const cfg     = SYMBOL_CONFIG[product];
-  state.price += (Math.random() - 0.5) * state.volatility * 2 + state.trend * state.price;
-  state.trend  = Math.max(-0.003, Math.min(0.003, state.trend + (Math.random() - 0.5) * 0.0001));
-  state.highPrice = Math.max(state.highPrice, state.price);
-  state.lowPrice  = Math.min(state.lowPrice,  state.price);
-  const change    = state.price - state.prevClose;
-  const changePct = (change / state.prevClose) * 100;
-  const dec       = getDecimals(cfg.tick);
-  const volume    = Math.floor(state.volumeBase * (0.8 + Math.random() * 0.4) * 100);
-  return {
-    contractCode, product, name: cfg.name, exchange: cfg.exchange,
-    price: +state.price.toFixed(dec), change: +change.toFixed(dec),
-    changePct: +changePct.toFixed(2), open: +state.openPrice.toFixed(dec),
-    high: +state.highPrice.toFixed(dec), low: +state.lowPrice.toFixed(dec),
-    prevClose: +state.prevClose.toFixed(dec), volume,
-    openInterest: Math.floor(state.openInterestBase * (0.95 + Math.random() * 0.1)),
-    turnover: +(volume * state.price * cfg.mult / 1e8).toFixed(2),
-    limitUp: +(state.prevClose * 1.05).toFixed(dec),
-    limitDown: +(state.prevClose * 0.95).toFixed(dec),
-    timestamp: Date.now(), isReal: false,
-  };
-}
-
-function getSimKlines(contractCode, tf) {
-  const state = getContractState(contractCode);
-  return state ? (state.klineHistory[tf] || []) : [];
-}
-
 // ===== 统一对外接口 =====
 async function fetchQuote(contractCode) {
-  const real = await fetchRealQuote(contractCode);
-  if (real) return real;
-  return getSimQuote(contractCode);
+  return await fetchRealQuote(contractCode);
 }
 
 async function fetchKlines(contractCode, tf) {
-  const real = await fetchRealKlines(contractCode, tf);
-  if (real && real.length >= 50) return real;
-  return getSimKlines(contractCode, tf);
+  return await fetchRealKlines(contractCode, tf);
 }
 
 // ===== 工具函数 =====
@@ -1550,9 +1512,9 @@ async function runAnalysis(contractCode) {
     if (!quote) throw new Error('行情获取失败，请检查网络');
 
     document.getElementById('dataSrc').textContent =
-      quote.isReal ? '数据来源：新浪财经（实时）' : '数据来源：模拟数据（接口不可用）';
+      '数据来源：新浪财经（实时）';
     document.getElementById('dataSrc').style.color =
-      quote.isReal ? '#3fb950' : '#d29922';
+      '#3fb950';
 
     renderPriceBar(quote, cfg);
     document.getElementById('priceBar').style.display = 'flex';
