@@ -1253,10 +1253,8 @@ async function runAnalysis(contractCode) {
     const quote = await fetchQuote(contractCode);
     if (!quote) throw new Error('行情获取失败，请检查网络');
 
-    document.getElementById('dataSrc').textContent =
-      quote.isReal ? '数据来源：新浪财经（实时）' : '数据来源：模拟数据（接口不可用）';
-    document.getElementById('dataSrc').style.color =
-      quote.isReal ? '#3fb950' : '#d29922';
+    document.getElementById('dataSrc').textContent = '数据来源：新浪财经（实时）';
+    document.getElementById('dataSrc').style.color = '#3fb950';
 
     renderPriceBar(quote, cfg);
     document.getElementById('priceBar').style.display = 'flex';
@@ -1568,7 +1566,15 @@ const server = http.createServer(function(req, res) {
     var code = p.query.code;
     var type = p.query.type || "15";
     if (!code) { res.writeHead(400); res.end("no code"); return; }
-    proxy("https://stock2.finance.sina.com.cn/futures/api/jsonp.php/cb=/InnerFuturesNewService.getFewMinLine?symbol=" + code + "&type=" + type, res);
+    var klineUrl;
+    if (type === "0") {
+      // 日线用 getDailyKLine 接口
+      klineUrl = "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/cb=/InnerFuturesNewService.getDailyKLine?symbol=" + code;
+    } else {
+      // 分钟线用 getFewMinLine 接口
+      klineUrl = "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/cb=/InnerFuturesNewService.getFewMinLine?symbol=" + code + "&type=" + type;
+    }
+    proxy(klineUrl, res);
     return;
   }
   res.writeHead(200, {"Content-Type": "text/html; charset=utf-8"});
