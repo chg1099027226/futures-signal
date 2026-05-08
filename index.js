@@ -8,7 +8,7 @@ const HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>期货信号分析</title>
+  <title>信号分析</title>
   <style>
 /* ===== Reset ===== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -434,6 +434,67 @@ body {
   padding-top: 1px;
 }
 .tf-rule-desc { color: var(--text2); line-height: 1.5; }
+
+
+/* ── 多时段共振提示 ── */
+.resonance-bar {
+  max-width: 1200px;
+  margin: 0 auto 8px;
+  padding: 10px 16px;
+  border-left: 4px solid var(--text2);
+  border-radius: 6px;
+  font-size: 13px;
+  display: none;
+}
+
+/* ── K线进度 ── */
+.kline-progress {
+  display: none;
+  gap: 16px;
+  padding: 8px 18px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.kp-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 240px;
+}
+.kp-label {
+  font-size: 11px;
+  color: var(--text2);
+  min-width: 72px;
+  flex-shrink: 0;
+}
+.kp-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.kp-fill {
+  height: 100%;
+  background: var(--green);
+  transition: width .3s;
+}
+.kp-pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 32px;
+  text-align: right;
+}
+.kp-warn {
+  font-size: 10px;
+  color: var(--yellow);
+  padding: 2px 6px;
+  background: rgba(210,153,34,.15);
+  border-radius: 3px;
+}
 
 </style>
 </head>
@@ -1366,6 +1427,18 @@ function calcSupportResistance(klines, currentPrice, atr) {
   addPoints(s2, 2);
   addPoints(s3, 3);
 
+  // ═══ 关键整数关口（心理价位）═══
+  // 期货交易者关注的整数位：50、100 的整数倍
+  const roundStep = currentPrice > 5000 ? 100 : currentPrice > 1000 ? 50 : 10;
+  const roundStart = Math.floor((currentPrice - atr * 5) / roundStep) * roundStep;
+  const roundEnd = Math.ceil((currentPrice + atr * 5) / roundStep) * roundStep;
+  for (let p = roundStart; p <= roundEnd; p += roundStep) {
+    if (Math.abs(p - currentPrice) < atr * 0.2) continue; // 太近的跳过
+    // 整百/整千权重更高
+    const isStrong = (p % (roundStep * 2) === 0);
+    allPoints.push({ price: p, age: 0, type: 'round', weight: isStrong ? 2 : 1 });
+  }
+
   // 按价格聚类
   const clusters = [];
   const sorted = [...allPoints].sort((a, b) => a.price - b.price);
@@ -1423,6 +1496,34 @@ function calcSupportResistance(klines, currentPrice, atr) {
  */
 function detectSignal(klines, idx, bigTrend = 0) {
   if (idx < 65) return { direction: null, score: 0, factors: [], filters: [] };
+
+  // ═══ 时间过滤：开盘/收盘前后假信号多 ═══
+  const lastBar = klines[idx];
+  if (lastBar.timestamp) {
+    const d = new Date(lastBar.timestamp);
+    const h = d.getHours(), m = d.getMinutes();
+    const t = h * 100 + m;
+    // 开盘前15分钟（9:00-9:15）波动大但方向不明
+    // 收盘前15分钟（14:45-15:00, 22:45-23:00）流动性差
+    // 午盘开盘前5分钟（13:30-13:35）跳空风险
+    const isNoiseTime =
+      (t >= 900 && t <= 914) ||    // 日盘开盘15分钟
+      (t >= 2100 && t <= 2114) ||  // 夜盘开盘15分钟
+      (t >= 1445 && t <= 1500) ||  // 日盘收盘前15分钟
+      (t >= 2245 && t <= 2300);    // 夜盘收盘前15分钟
+
+    if (isNoiseTime) {
+      return {
+        direction: null, score: 0, factors: [], filters: [
+          { name: '时间过滤', pass: false, desc: \`当前时段(\${h}:\${String(m).padStart(2,'0')})波动大/流动性差，不出信号\` }
+        ],
+        longScore: 0, shortScore: 0, adx: null, rsi: null,
+        boll: {}, candleSignal: { bullish: 0, bearish: 0, patterns: [] },
+        volSignal: { signal: 'neutral', ratio: 1, desc: '' },
+        bullDimensions: 0, bearDimensions: 0,
+      };
+    }
+  }
 
   const slice  = klines.slice(0, idx + 1);
   const closes = slice.map(k => k.close);
@@ -1680,6 +1781,32 @@ function detectSignal(klines, idx, bigTrend = 0) {
     score = Math.round((1 - longPct) * 100);
   }
 
+  // ═══ 趋势加速检测：均线发散 + ATR 放大 = 不逆势 ═══
+  if (direction && n > 20) {
+    const maSpreadNow = Math.abs(m5 - m20);
+    const maSpread10 = Math.abs(ma5[n - 10] - ma20[n - 10]);
+    const atrNow = curAtr;
+    const atr10 = atrArr[n - 10] || atrNow;
+    const maDiverging = maSpreadNow > maSpread10 * 1.5; // 均线加速发散
+    const atrExpanding = atrNow > atr10 * 1.3;          // 波动率放大
+
+    if (maDiverging && atrExpanding) {
+      // 趋势正在加速，检查是否逆势
+      const trendDir = m5 > m20 ? 'long' : 'short';
+      if (direction !== trendDir) {
+        // 逆加速趋势操作，极其危险
+        filters.push({ name: '趋势加速', pass: false, desc: \`均线发散+波动放大，\${trendDir === 'long' ? '多头' : '空头'}加速中，不逆势\` });
+        direction = null;
+      } else {
+        // 顺加速趋势，但要注意可能是末端
+        if (curRsi > 70 || curRsi < 30) {
+          filters.push({ name: '趋势加速', pass: false, desc: \`趋势加速但RSI=\${curRsi.toFixed(0)}极端，可能是末端\` });
+          direction = null;
+        }
+      }
+    }
+  }
+
   // 无信号原因
   if (!direction) {
     if (!ADX_OK) {
@@ -1725,6 +1852,13 @@ function calcEntryExit(direction, currentPrice, atr, sr, klines) {
   const ema20 = calcEMA(closes, 20);
   const m10 = ema10[n - 1];
   const m20 = ema20[n - 1];
+
+  // ═══ 波动率自适应：ATR 突然放大时加宽止损 ═══
+  const atrArr = calcATR(klines, 14);
+  const atrPrev = atrArr[n - 6] || atr; // 5 根前的 ATR
+  const atrRatio = atrPrev > 0 ? atr / atrPrev : 1;
+  // 如果 ATR 突然放大 50% 以上（跳空/消息面），止损乘以放大系数
+  const volMultiplier = atrRatio > 1.5 ? Math.min(atrRatio, 2.0) : 1.0;
 
   // 找最近的有效 swing（用于精确止损）
   const recentSwings = findSwings(klines, 3, 2, 30);
@@ -1786,9 +1920,12 @@ function calcEntryExit(direction, currentPrice, atr, sr, klines) {
     }
 
     // 止损不能太窄（至少 0.8ATR）也不能太宽（最多 2.5ATR）
+    // 波动率自适应：ATR 突然放大时加宽止损范围
+    const minStop = atr * 0.8 * volMultiplier;
+    const maxStop = atr * 2.5 * volMultiplier;
     const stopDist = entry - stopLoss;
-    if (stopDist < atr * 0.8) stopLoss = entry - atr * 0.8;
-    if (stopDist > atr * 2.5) stopLoss = entry - atr * 2.5;
+    if (stopDist < minStop) stopLoss = entry - minStop;
+    if (stopDist > maxStop) stopLoss = entry - maxStop;
     const finalStopDist = entry - stopLoss;
 
     // ═══ 做多止盈 ═══
@@ -1865,8 +2002,10 @@ function calcEntryExit(direction, currentPrice, atr, sr, klines) {
     }
 
     const stopDist = stopLoss - entry;
-    if (stopDist < atr * 0.8) stopLoss = entry + atr * 0.8;
-    if (stopDist > atr * 2.5) stopLoss = entry + atr * 2.5;
+    const minStopS = atr * 0.8 * volMultiplier;
+    const maxStopS = atr * 2.5 * volMultiplier;
+    if (stopDist < minStopS) stopLoss = entry + minStopS;
+    if (stopDist > maxStopS) stopLoss = entry + maxStopS;
     const finalStopDist = stopLoss - entry;
 
     // ═══ 做空止盈 ═══
@@ -2157,6 +2296,35 @@ function fullAnalysis(klines, bigTrend = 0) {
   if (sig.direction && rr1 < 1.2) {
     sig.direction = null;
     sig.filters.push({ name: '无信号原因', pass: false, desc: \`盈亏比\${rr1.toFixed(2)} < 1.2，风险收益不合理\` });
+  }
+
+  // ═══ 连续信号去重：已经在趋势中不重复出信号 ═══
+  // 如果最近 5 根 K 线已经连续同向运动（全阳或全阴），说明趋势已启动，
+  // 此时出信号是追涨/追跌，不是好的入场点
+  if (sig.direction && n > 5) {
+    const recent5 = klines.slice(-5);
+    const allUp = recent5.every(k => k.close > k.open);
+    const allDown = recent5.every(k => k.close < k.open);
+
+    if (sig.direction === 'long' && allUp) {
+      sig.filters.push({ name: '信号去重', pass: false, desc: '连续5阳线，趋势已启动，等回踩再进场' });
+      sig.direction = null;
+    } else if (sig.direction === 'short' && allDown) {
+      sig.filters.push({ name: '信号去重', pass: false, desc: '连续5阴线，趋势已启动，等反弹再进场' });
+      sig.direction = null;
+    }
+  }
+
+  // ═══ 信号衰减：入场价偏离过远则信号失效 ═══
+  // 如果当前价已经远离建议入场价超过 2ATR，说明错过了最佳时机
+  if (sig.direction && entry) {
+    const distToEntry = sig.direction === 'long'
+      ? price - entry   // 做多时，价格在入场价上方越远越不好
+      : entry - price;  // 做空时，价格在入场价下方越远越不好
+    if (distToEntry > atr * 2) {
+      sig.filters.push({ name: '信号衰减', pass: false, desc: \`当前价偏离入场价 \${(distToEntry/atr).toFixed(1)}ATR，已错过最佳时机\` });
+      sig.direction = null;
+    }
   }
 
   const bt = backtest(klines, bigTrend, 15);
@@ -2516,8 +2684,15 @@ async function runAnalysis(contractCode, silent = false) {
     const a5  = fullAnalysis(k5,  trend.trendValue);
     const a15 = fullAnalysis(k15, trend.trendValue);
 
-    renderPanel('5m',  a5,  cfg);
-    renderPanel('15m', a15, cfg);
+    // ═══ 多时段共振检测 ═══
+    const resonance = detectResonance(a5, a15, trend.trendValue);
+
+    renderPanel('5m',  a5,  cfg, resonance);
+    renderPanel('15m', a15, cfg, resonance);
+    renderResonance(resonance);
+
+    // K 线进度显示
+    renderKlineProgress(k15, k5);
 
     document.getElementById('signalGrid').style.display = 'grid';
     document.getElementById('lastUpdate').textContent =
@@ -2576,6 +2751,115 @@ function renderTrend(trend) {
   \`;
 }
 
+// ─── 多时段共振检测 ────────────────────────────────────────
+
+function detectResonance(a5, a15, bigTrend) {
+  const d5 = a5?.direction;
+  const d15 = a15?.direction;
+
+  // 三方向状态
+  if (!d5 && !d15) {
+    return { level: 'none', text: '5分/15分均无信号', color: '#8b949e' };
+  }
+  if (d5 && d15 && d5 === d15) {
+    // 强共振：两个周期同向
+    const dirText = d5 === 'long' ? '多' : '空';
+    const alignedWithBig = (d5 === 'long' && bigTrend > 0) || (d5 === 'short' && bigTrend < 0);
+    if (alignedWithBig) {
+      return {
+        level: 'strong',
+        direction: d5,
+        text: \`⭐ 三重共振做\${dirText}：日线+15分+5分同向，信号最强\`,
+        color: d5 === 'long' ? '#f85149' : '#3fb950',
+        boost: 20, // 决策加分
+      };
+    }
+    return {
+      level: 'medium',
+      direction: d5,
+      text: \`✨ 双周期共振做\${dirText}：5分+15分同向，信号增强\`,
+      color: d5 === 'long' ? '#f85149' : '#3fb950',
+      boost: 10,
+    };
+  }
+  if (d5 && d15 && d5 !== d15) {
+    // 矛盾：两个周期反向
+    return {
+      level: 'conflict',
+      text: \`⚠️ 周期矛盾：5分\${d5==='long'?'多':'空'} vs 15分\${d15==='long'?'多':'空'}，建议观望\`,
+      color: '#d29922',
+      boost: -20,
+    };
+  }
+  // 只有一个周期有信号
+  const activeTf = d5 ? '5分' : '15分';
+  const activeDir = d5 || d15;
+  return {
+    level: 'single',
+    direction: activeDir,
+    text: \`仅\${activeTf}有\${activeDir==='long'?'多':'空'}头信号，另一周期无信号\`,
+    color: '#58a6ff',
+    boost: 0,
+  };
+}
+
+function renderResonance(res) {
+  let el = document.getElementById('resonanceBar');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'resonanceBar';
+    el.className = 'resonance-bar';
+    const grid = document.getElementById('signalGrid');
+    grid.parentNode.insertBefore(el, grid);
+  }
+  el.innerHTML = \`<span style="color:\${res.color};font-weight:700">\${res.text}</span>\`;
+  el.style.borderLeftColor = res.color;
+  el.style.background = res.color + '14';
+  el.style.display = 'block';
+}
+
+// ─── K线进度显示 ────────────────────────────────────────────
+
+function renderKlineProgress(k15, k5) {
+  let el = document.getElementById('klineProgress');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'klineProgress';
+    el.className = 'kline-progress';
+    const priceBar = document.getElementById('priceBar');
+    priceBar.parentNode.insertBefore(el, priceBar.nextSibling);
+  }
+
+  const now = Date.now();
+
+  // 5 分钟 K 线进度
+  const last5 = k5 && k5.length ? k5[k5.length - 1] : null;
+  const p5 = last5 ? Math.min(100, ((now - last5.timestamp) / (5 * 60000)) * 100) : 0;
+
+  // 15 分钟 K 线进度
+  const last15 = k15 && k15.length ? k15[k15.length - 1] : null;
+  const p15 = last15 ? Math.min(100, ((now - last15.timestamp) / (15 * 60000)) * 100) : 0;
+
+  const warn5 = p5 < 20 ? '刚开始，信号不稳' : p5 > 80 ? '即将收盘' : '';
+  const warn15 = p15 < 20 ? '刚开始，信号不稳' : p15 > 80 ? '即将收盘' : '';
+
+  el.innerHTML = \`
+    <div class="kp-item">
+      <span class="kp-label">5分K线进度</span>
+      <div class="kp-bar"><div class="kp-fill" style="width:\${p5.toFixed(0)}%;background:\${p5>80?'#ffa657':p5<20?'#d29922':'#3fb950'}"></div></div>
+      <span class="kp-pct">\${p5.toFixed(0)}%</span>
+      \${warn5 ? \`<span class="kp-warn">\${warn5}</span>\` : ''}
+    </div>
+    <div class="kp-item">
+      <span class="kp-label">15分K线进度</span>
+      <div class="kp-bar"><div class="kp-fill" style="width:\${p15.toFixed(0)}%;background:\${p15>80?'#ffa657':p15<20?'#d29922':'#3fb950'}"></div></div>
+      <span class="kp-pct">\${p15.toFixed(0)}%</span>
+      \${warn15 ? \`<span class="kp-warn">\${warn15}</span>\` : ''}
+    </div>
+  \`;
+  el.style.display = 'flex';
+}
+
 // ─── 价格行 ──────────────────────────────────────────────────
 
 function renderPriceBar(quote, cfg) {
@@ -2606,8 +2890,21 @@ function renderPriceBar(quote, cfg) {
 
 // ─── 信号面板 ────────────────────────────────────────────────
 
-function renderPanel(suffix, analysis, cfg) {
+function renderPanel(suffix, analysis, cfg, resonance) {
   const tk = cfg.tick;
+
+  // 共振加分影响仓位
+  if (resonance && analysis?.decision?.canEnter && resonance.boost) {
+    const origPct = analysis.decision.positionPct;
+    const boostedPct = Math.max(10, Math.min(100, origPct + resonance.boost));
+    if (resonance.direction === analysis.direction) {
+      analysis.decision.positionPct = boostedPct;
+      analysis.decision.reason += \`（共振\${resonance.boost > 0 ? '+' : ''}\${resonance.boost}%仓位）\`;
+    } else if (resonance.level === 'conflict') {
+      analysis.decision.positionPct = Math.max(10, origPct + resonance.boost);
+      analysis.decision.reason += '（周期矛盾降仓）';
+    }
+  }
 
   if (!analysis) {
     clearPanel(suffix, '数据不足（需要至少80根K线）');
