@@ -8,7 +8,7 @@ const HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>信号分析</title>
+  <title>期货信号分析</title>
   <style>
 /* ===== Reset ===== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -494,6 +494,35 @@ body {
   padding: 2px 6px;
   background: rgba(210,153,34,.15);
   border-radius: 3px;
+}
+
+
+/* ── 合约活跃度标识 ── */
+.month-btn.inactive {
+  opacity: 0.4;
+  position: relative;
+}
+.month-btn.inactive::after {
+  content: '❌';
+  font-size: 9px;
+  position: absolute;
+  top: 2px;
+  right: 4px;
+}
+.month-btn.active-contract {
+  position: relative;
+}
+.month-btn.active-contract::after {
+  content: '●';
+  font-size: 10px;
+  color: var(--green);
+  position: absolute;
+  top: 2px;
+  right: 4px;
+}
+.month-btn.highly-active::after {
+  content: '●●';
+  color: var(--green);
 }
 
 </style>
@@ -1042,8 +1071,14 @@ function getSimKlines(contractCode, tf) {
 // ===== 统一对外接口 =====
 async function fetchQuote(contractCode) {
   const real = await fetchRealQuote(contractCode);
-  if (real) return real;
-  return getSimQuote(contractCode);
+  if (real && real.price > 0) return real;
+  // 真实数据获取失败时，返回标记了的模拟数据
+  const sim = getSimQuote(contractCode);
+  if (sim) {
+    sim.isReal = false;
+    sim.noRealData = true;
+  }
+  return sim;
 }
 
 async function fetchKlines(contractCode, tf) {
@@ -2599,6 +2634,44 @@ function buildMonthButtons(product) {
 
   section.style.display = 'block';
   section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  // 后台静默检测每个合约的活跃度
+  checkContractsActivity(contracts);
+}
+
+// 检测合约活跃度，给按钮加上状态标识
+async function checkContractsActivity(contracts) {
+  for (const c of contracts) {
+    try {
+      const res = await fetch(\`/api/quote?code=\${c.code}\`);
+      const text = await res.text();
+      const m = text.match(/"([^"]+)"/);
+      const btn = document.querySelector(\`.month-btn[data-code="\${c.code}"]\`);
+      if (!btn) continue;
+
+      if (!m || !m[1] || m[1].length < 5) {
+        // 无数据：合约过期或不活跃
+        btn.classList.add('inactive');
+        btn.title = '无实时数据';
+      } else {
+        const p = m[1].split(',');
+        const oi = parseInt(p[14]) || 0;
+        const price = parseFloat(p[5]) || 0;
+
+        if (price > 0) {
+          btn.classList.add('active-contract');
+          if (oi > 100000) {
+            btn.classList.add('highly-active');
+            btn.title = \`持仓 \${(oi/10000).toFixed(1)}万手（活跃）\`;
+          } else if (oi > 10000) {
+            btn.title = \`持仓 \${(oi/10000).toFixed(1)}万手\`;
+          } else if (oi > 0) {
+            btn.title = \`持仓 \${oi}手（较低）\`;
+          }
+        }
+      }
+    } catch (e) { /* 忽略错误 */ }
+  }
 }
 
 // ─── 选月份 → 分析 + 启动自动刷新 ────────────────────────────
@@ -2653,10 +2726,16 @@ async function runAnalysis(contractCode, silent = false) {
     const quote = await fetchQuote(contractCode);
     if (!quote) throw new Error('行情获取失败');
 
-    document.getElementById('dataSrc').textContent =
-      quote.isReal ? '数据来源：新浪财经（实时）' : '数据来源：模拟数据';
-    document.getElementById('dataSrc').style.color =
-      quote.isReal ? '#3fb950' : '#d29922';
+    if (quote.isReal) {
+      document.getElementById('dataSrc').textContent = '数据来源：新浪财经（实时）';
+      document.getElementById('dataSrc').style.color = '#3fb950';
+    } else if (quote.noRealData) {
+      document.getElementById('dataSrc').textContent = \`⚠️ \${contractCode} 无实时数据（合约可能已过期或不活跃），当前显示模拟数据仅供参考\`;
+      document.getElementById('dataSrc').style.color = '#f85149';
+    } else {
+      document.getElementById('dataSrc').textContent = '数据来源：模拟数据';
+      document.getElementById('dataSrc').style.color = '#d29922';
+    }
 
     renderPriceBar(quote, cfg);
     document.getElementById('priceBar').style.display = 'flex';
