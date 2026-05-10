@@ -867,8 +867,9 @@ async function fetchRealQuote(contractCode) {
 }
 
 // 解析新浪期货行情（2026年实测字段顺序）
-// [0]名称 [1]? [2]今开 [3]最高 [4]最低 [5]最新价
-// [6]买一价 [7]卖一价 [8-10]... [11]买量 [12]卖量
+// [0]名称 [1]时间 [2]今开 [3]最高 [4]最低 [5]收盘价(日盘后) 
+// [6]买一价 [7]卖一价 [8]最新价 [9]?
+// [10]?持仓 [11]买量 [12]卖量
 // [13]成交额 [14]持仓量 [15-16]... [17]日期 [18]是否交易
 // [27]昨结算价
 function parseSinaQuote(text, contractCode) {
@@ -885,13 +886,25 @@ function parseSinaQuote(text, contractCode) {
     const open      = parseFloat(p[2])  || 0;
     const high      = parseFloat(p[3])  || 0;
     const low       = parseFloat(p[4])  || 0;
-    const price     = parseFloat(p[5])  || 0;
-    const oi        = parseInt(p[14])   || 0;
     const prevClose = parseFloat(p[27]) || 0;
+
+    // 最新价：按优先级尝试多个字段
+    // p[8] 是最新成交价（夜盘和日盘都有）
+    // p[5] 是日盘收盘价（夜盘时段为 0）
+    // p[7] 是卖一价，p[6] 是买一价
+    let price = parseFloat(p[8]) || 0;
+    if (price <= 0) price = parseFloat(p[5]) || 0;
+    if (price <= 0) {
+      const bid = parseFloat(p[6]) || 0;
+      const ask = parseFloat(p[7]) || 0;
+      if (bid > 0 && ask > 0) price = (bid + ask) / 2;
+    }
 
     if (price <= 0) return null;
 
-    // 成交量：用持仓量旁边的字段或买卖量之和估算
+    const oi        = parseInt(p[14])   || 0;
+
+    // 成交量
     const vol1 = parseInt(p[11]) || 0;
     const vol2 = parseInt(p[12]) || 0;
     const volume = vol1 + vol2;
